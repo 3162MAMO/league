@@ -1,1 +1,527 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Koridor</title>
+<style>
+  :root {
+    --ground: #16221f; --ink: #e8efe6; --dim: #8fa39a; --gold: #f2c14e;
+    --blue: #57b8ff; --red: #ff7a59; --panel: rgba(12, 20, 18, .88);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink);
+    font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  #lobby { position: fixed; inset: 0; display: grid; place-items: center; background: var(--ground); z-index: 5; padding: 16px; }
+  #card { width: min(420px, 100%); }
+  h1 { font-size: 44px; margin: 0 0 4px; letter-spacing: -1px; font-weight: 800; }
+  h1 span { color: var(--gold); }
+  p.sub { margin: 0 0 24px; color: var(--dim); line-height: 1.5; }
+  label { display: block; font-size: 14px; color: var(--dim); margin: 14px 0 6px; }
+  input { width: 100%; padding: 12px 14px; font-size: 17px; border-radius: 8px; border: 2px solid #2c3f38;
+    background: #0f1917; color: var(--ink); outline: none; }
+  input:focus { border-color: var(--gold); }
+  button { font: inherit; cursor: pointer; }
+  #go { width: 100%; margin-top: 22px; padding: 14px; font-size: 18px; font-weight: 700; border: 0; border-radius: 8px;
+    background: var(--gold); color: #1a1a10; }
+  #go:focus-visible, #room:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  #msg { min-height: 22px; margin-top: 12px; color: var(--red); }
+  .keys { margin-top: 20px; color: var(--dim); font-size: 14px; line-height: 1.7; }
+  .keys b { color: var(--ink); }
+  #room { position: fixed; top: 12px; left: 12px; z-index: 3; background: var(--panel); color: var(--ink); border: 1px solid #2c3f38;
+    border-radius: 8px; padding: 8px 12px; font-size: 14px; display: none; }
+  #room b { color: var(--gold); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="room" title="ArkadaÅŸÄ±na gÃ¶ndermek iÃ§in linki kopyala"></button>
 
+<div id="lobby">
+  <div id="card">
+    <h1>Kori<span>dor</span></h1>
+    <p class="sub">Tek koridor, iki takÄ±m. Kuleleri yÄ±k, rakibin nexus'unu patlat.</p>
+    <label for="name">AdÄ±n</label>
+    <input id="name" maxlength="14" placeholder="Oyuncu" autocomplete="off">
+    <label for="room-in">Oda kodu (arkadaÅŸÄ±n da aynÄ±sÄ±nÄ± girsin)</label>
+    <input id="room-in" maxlength="20" autocomplete="off">
+    <button id="go">Odaya gir</button>
+    <div id="msg"></div>
+    <div class="keys">
+      <b>Bilgisayar:</b> saÄŸ tÄ±k yÃ¼rÃ¼ / saldÄ±r, Q ok, W atÄ±l<br><b>Telefon:</b> sol joystick yÃ¼rÃ¼r, saÄŸdaki bÃ¼yÃ¼k dÃ¼ÄŸme saldÄ±rÄ±r. Q ve W'ye basÄ±lÄ± tutup sÃ¼rÃ¼kleyerek niÅŸan al, bÄ±rakÄ±nca Ã§Ä±kar.
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+
+const COL = {
+  ground: '#16221f', lane: '#22332e', grid: '#1c2b26', river: '#17343f', wall: '#0e1715',
+  blue: '#57b8ff', red: '#ff7a59', gold: '#f2c14e', ink: '#e8efe6', hp: '#6fd08c', hpLow: '#e2574c',
+};
+const teamCol = t => (t === 0 ? COL.blue : COL.red);
+
+let W = 3000, H = 900, LANE = 450;
+let ws = null, joined = false, myId = 0, myTeam = 0, code = '';
+let S = null, frame = 0;
+const rp = new Map();
+const flashes = [];
+const mouse = { x: 0, y: 0 };
+let marker = null;
+let vw = innerWidth, vh = innerHeight, sc = 1, dpr = 1;
+const cam = { x: 0, y: 0 };
+
+// ---------- Lobi ----------
+const params = new URLSearchParams(location.search);
+const rand = () => Math.random().toString(36).slice(2, 6);
+$('room-in').value = params.get('oda') || 'oda-' + rand();
+$('name').value = localStorage.getItem('koridor-ad') || '';
+
+function join() {
+  const name = $('name').value.trim() || 'Oyuncu';
+  const room = $('room-in').value.trim();
+  try { localStorage.setItem('koridor-ad', name); } catch (e) {}
+  $('msg').textContent = 'BaÄŸlanÄ±yorâ€¦';
+  try {
+    const el = document.documentElement;
+    if (touchUI && el.requestFullscreen) el.requestFullscreen().then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); }, () => {});
+  } catch (e) {}
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, room }));
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.t === 'hi') {
+      joined = true; myId = m.id; myTeam = m.team; W = m.w; H = m.h; LANE = m.lane; code = m.code;
+      $('lobby').style.display = 'none';
+      const r = $('room');
+      r.style.display = 'block';
+      r.innerHTML = 'Oda: <b></b> Â· linki kopyala';
+      r.querySelector('b').textContent = code;
+    } else if (m.t === 's') {
+      S = m;
+      for (const f of m.ev) flashes.push({ ...f, t: performance.now() });
+    } else if (m.t === 'err') {
+      $('msg').textContent = m.msg;
+    }
+  };
+  ws.onclose = () => {
+    if (joined) { joined = false; S = null; $('lobby').style.display = 'grid'; $('room').style.display = 'none'; }
+    $('msg').textContent = 'BaÄŸlantÄ± koptu. Tekrar gir.';
+  };
+}
+$('go').onclick = join;
+$('room-in').addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
+$('name').addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
+$('room').onclick = () => {
+  const link = location.origin + '/?oda=' + encodeURIComponent(code);
+  const done = () => { $('room').innerHTML = 'Link kopyalandÄ±'; setTimeout(() => { $('room').innerHTML = 'Oda: <b></b> Â· linki kopyala'; $('room').querySelector('b').textContent = code; }, 1500); };
+  if (navigator.clipboard) navigator.clipboard.writeText(link).then(done, () => prompt('Linki kopyala:', link));
+  else prompt('Linki kopyala:', link);
+};
+
+// ---------- Girdi ----------
+const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+const toWorld = (sx, sy) => ({ x: (sx - vw / 2) / sc + cam.x, y: (sy - vh / 2) / sc + cam.y });
+
+let touchUI = matchMedia('(pointer: coarse)').matches;
+const mePl = () => (S ? S.pl.find(p => p.id === myId) : null);
+const enemiesAlive = () => (S ? [
+  ...S.pl.filter(p => !p.d && p.team !== myTeam),
+  ...S.mn.filter(m => m.team !== myTeam),
+  ...S.st.filter(s => s.team !== myTeam && s.hp > 0 && !s.p),
+] : []);
+
+function pickAt(w, slack) {
+  let hit = null, best = 1e9;
+  for (const t of enemiesAlive()) {
+    const d = Math.hypot((t.rx ?? t.x) - w.x, (t.ry ?? t.y) - w.y) - t.r;
+    if (d < slack && d < best) { hit = t; best = d; }
+  }
+  return hit;
+}
+function nearestFoe(range) {
+  const me = mePl();
+  if (!me) return null;
+  let hit = null, best = range;
+  for (const t of enemiesAlive()) {
+    let d = Math.hypot(t.x - me.x, t.y - me.y) - t.r;
+    if (t.n) d -= 60; // ÅŸampiyonlara Ã¶ncelik
+    if (d < best) { hit = t; best = d; }
+  }
+  return hit;
+}
+
+// ----- Fare -----
+function mouseDown(e) {
+  mouse.x = e.clientX; mouse.y = e.clientY;
+  const w = toWorld(e.clientX, e.clientY);
+  const hit = pickAt(w, 10);
+  if (hit) { send({ t: 'atk', id: hit.id }); marker = { x: hit.x, y: hit.y, t: performance.now(), atk: true }; }
+  else { send({ t: 'move', x: w.x, y: w.y }); marker = { x: w.x, y: w.y, t: performance.now() }; }
+}
+
+// ----- Dokunmatik (Wild Rift tarzÄ±) -----
+const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
+let btn = null;       // basÄ±lÄ± yetenek: { id, key, bx, by, dx, dy, drag }
+let atkHeld = null;   // saldÄ±rÄ± dÃ¼ÄŸmesini tutan parmak
+const UI = () => ({
+  atk: { x: vw - 95, y: vh - 95, r: 50 },
+  q: { x: vw - 205, y: vh - 65, r: 36 },
+  w: { x: vw - 178, y: vh - 155, r: 36 },
+});
+
+function doAttack() {
+  const t = nearestFoe(520);
+  if (t) send({ t: 'atk', id: t.id });
+}
+function fireAbility(b) {
+  const me = mePl();
+  if (!me || me.d) return;
+  let dx, dy;
+  const foe = b.key === 'q' ? nearestFoe(900) : null;
+  if (b.drag) { const l = Math.hypot(b.dx, b.dy); dx = b.dx / l; dy = b.dy / l; }
+  else if (foe) { dx = foe.x - me.x; dy = foe.y - me.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l; }
+  else if (b.key === 'w' && joy.id !== null && Math.hypot(joy.x, joy.y) > 8) { const l = Math.hypot(joy.x, joy.y); dx = joy.x / l; dy = joy.y / l; }
+  else { dx = myTeam === 0 ? 1 : -1; dy = 0; }
+  send({ t: b.key, x: me.x + dx * 600, y: me.y + dy * 600 });
+}
+
+cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('pointerdown', e => {
+  if (!S || !joined) return;
+  if (e.pointerType === 'mouse') { mouseDown(e); return; }
+  touchUI = true;
+  e.preventDefault();
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  const x = e.clientX, y = e.clientY, u = UI();
+  for (const k of ['atk', 'q', 'w']) {
+    const b = u[k];
+    if (Math.hypot(x - b.x, y - b.y) <= b.r + 12) {
+      if (k === 'atk') { if (atkHeld === null) { atkHeld = e.pointerId; doAttack(); } }
+      else if (!btn) btn = { id: e.pointerId, key: k, bx: b.x, by: b.y, dx: 0, dy: 0, drag: false };
+      return;
+    }
+  }
+  if (x < vw * 0.45 && y > vh * 0.2 && joy.id === null) {
+    joy.id = e.pointerId; joy.ox = x; joy.oy = y; joy.x = 0; joy.y = 0;
+    return;
+  }
+  const hit = pickAt(toWorld(x, y), 26);
+  if (hit) send({ t: 'atk', id: hit.id });
+});
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') { mouse.x = e.clientX; mouse.y = e.clientY; return; }
+  if (e.pointerId === joy.id) {
+    let dx = e.clientX - joy.ox, dy = e.clientY - joy.oy;
+    const l = Math.hypot(dx, dy);
+    if (l > 60) { dx = dx / l * 60; dy = dy / l * 60; }
+    joy.x = dx; joy.y = dy;
+  } else if (btn && e.pointerId === btn.id) {
+    btn.dx = e.clientX - btn.bx; btn.dy = e.clientY - btn.by;
+    if (Math.hypot(btn.dx, btn.dy) > 16) btn.drag = true;
+  }
+});
+function endPtr(e) {
+  if (e.pointerId === joy.id) {
+    joy.id = null; joy.x = 0; joy.y = 0;
+    const me = mePl();
+    if (me) send({ t: 'move', x: me.x, y: me.y });
+  } else if (btn && e.pointerId === btn.id) {
+    fireAbility(btn); btn = null;
+  } else if (e.pointerId === atkHeld) {
+    atkHeld = null;
+  }
+}
+cv.addEventListener('pointerup', endPtr);
+cv.addEventListener('pointercancel', e => {
+  if (btn && e.pointerId === btn.id) btn = null;
+  else endPtr(e);
+});
+
+let tk = 0;
+setInterval(() => {
+  if (!S || !joined) return;
+  const me = mePl();
+  if (!me || me.d) return;
+  if (joy.id !== null) {
+    const l = Math.hypot(joy.x, joy.y);
+    if (l > 10) send({ t: 'move', x: me.x + joy.x / l * 500, y: me.y + joy.y / l * 500 });
+  } else if (atkHeld !== null && ++tk % 3 === 0) {
+    doAttack();
+  }
+}, 90);
+
+addEventListener('keydown', e => {
+  if (!joined || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'q' || k === 'w') {
+    const w = toWorld(mouse.x, mouse.y);
+    send({ t: k, x: w.x, y: w.y });
+  }
+});
+
+// ---------- Ã‡izim ----------
+function resize() {
+  dpr = devicePixelRatio || 1;
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  sc = Math.max(0.5, Math.min(1, vw / 1300));
+}
+addEventListener('resize', resize);
+resize();
+
+function smooth(e) {
+  let r = rp.get(e.id);
+  if (!r) { r = { x: e.x, y: e.y }; rp.set(e.id, r); }
+  r.x += (e.x - r.x) * 0.4; r.y += (e.y - r.y) * 0.4;
+  r.seen = frame;
+  e.rx = r.x; e.ry = r.y;
+}
+
+const sx = x => (x - cam.x) * sc + vw / 2;
+const sy = y => (y - cam.y) * sc + vh / 2;
+
+function bar(x, y, w, hp, max, col) {
+  const p = Math.max(0, hp / max);
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(x - w / 2 - 1, y - 1, w + 2, 7);
+  ctx.fillStyle = col || (p > 0.3 ? COL.hp : COL.hpLow); ctx.fillRect(x - w / 2, y, w * p, 5);
+}
+
+function drawWorld() {
+  // zemin
+  ctx.fillStyle = COL.wall; ctx.fillRect(0, 0, vw, vh);
+  const x0 = sx(0), y0 = sy(0);
+  ctx.fillStyle = COL.ground; ctx.fillRect(x0, y0, W * sc, H * sc);
+  // koridor
+  ctx.fillStyle = COL.lane; ctx.fillRect(x0, sy(LANE - 120), W * sc, 240 * sc);
+  // nehir
+  ctx.fillStyle = COL.river; ctx.fillRect(sx(W / 2 - 70), y0, 140 * sc, H * sc);
+  // Ä±zgara
+  ctx.strokeStyle = COL.grid; ctx.lineWidth = 1; ctx.beginPath();
+  for (let x = 0; x <= W; x += 100) { ctx.moveTo(sx(x), y0); ctx.lineTo(sx(x), y0 + H * sc); }
+  for (let y = 0; y <= H; y += 100) { ctx.moveTo(x0, sy(y)); ctx.lineTo(x0 + W * sc, sy(y)); }
+  ctx.stroke();
+  // Ã¼sler
+  for (const t of [0, 1]) {
+    const bx = t === 0 ? 0 : W - 380;
+    ctx.fillStyle = teamCol(t) + '18'; ctx.fillRect(sx(bx), y0, 380 * sc, H * sc);
+  }
+  ctx.strokeStyle = '#2c3f38'; ctx.lineWidth = 3; ctx.strokeRect(x0, y0, W * sc, H * sc);
+}
+
+function drawStruct(s) {
+  const x = sx(s.rx), y = sy(s.ry), r = s.r * sc, c = teamCol(s.team);
+  if (s.hp <= 0) {
+    ctx.fillStyle = '#0c1412'; ctx.beginPath(); ctx.arc(x, y, r * 0.6, 0, 7); ctx.fill();
+    return;
+  }
+  if (s.k === 'tower') {
+    ctx.strokeStyle = c + '30'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 430 * sc, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#0c1412'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    ctx.fillStyle = c; ctx.fillRect(x - r * 0.5, y - r * 0.5, r, r);
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2; ctx.strokeRect(x - r * 0.5, y - r * 0.5, r, r);
+  } else {
+    ctx.fillStyle = '#0c1412'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r * 0.72, 0, 7); ctx.fill();
+    ctx.strokeStyle = s.p ? COL.gold : COL.ink; ctx.lineWidth = s.p ? 4 : 2;
+    ctx.beginPath(); ctx.arc(x, y, r * 0.9, 0, 7); ctx.stroke();
+  }
+  bar(x, y - r - 12, r * 1.6, s.hp, s.mh, c);
+}
+
+function drawChamp(p) {
+  if (p.d) return;
+  const x = sx(p.rx), y = sy(p.ry), r = p.r * sc, c = teamCol(p.team);
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(x, y + r * 0.7, r, r * 0.4, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.lineWidth = p.id === myId ? 4 : 2; ctx.strokeStyle = p.id === myId ? COL.ink : '#0c1412';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
+  ctx.fillStyle = '#0c1412'; ctx.font = 'bold ' + Math.round(20 * sc) + 'px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText((p.n[0] || '?').toUpperCase(), x, y + 1);
+  bar(x, y - r - 14, 54 * sc, p.hp, p.mh);
+  ctx.fillStyle = COL.ink; ctx.font = Math.round(13 * sc + 1) + 'px sans-serif'; ctx.textBaseline = 'bottom';
+  ctx.fillText(p.n, x, y - r - 16);
+}
+
+function drawMinion(m) {
+  const x = sx(m.rx), y = sy(m.ry), r = m.r * sc;
+  ctx.fillStyle = teamCol(m.team); ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#0c1412'; ctx.lineWidth = 2; ctx.stroke();
+  bar(x, y - r - 8, r * 2, m.hp, m.mh);
+}
+
+function drawFx(now) {
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    const f = flashes[i], age = now - f.t;
+    if (age > 160) { flashes.splice(i, 1); continue; }
+    ctx.globalAlpha = 1 - age / 160;
+    ctx.strokeStyle = f.k ? COL.gold : teamCol(f.c); ctx.lineWidth = f.k ? 4 : 2.5;
+    ctx.beginPath(); ctx.moveTo(sx(f.a[0]), sy(f.a[1])); ctx.lineTo(sx(f.b[0]), sy(f.b[1])); ctx.stroke();
+    ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(sx(f.b[0]), sy(f.b[1]), 7 * sc, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  for (const q of S.pr) {
+    ctx.save(); ctx.translate(sx(q.x), sy(q.y)); ctx.rotate(q.a);
+    ctx.fillStyle = teamCol(q.team); ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.ellipse(-14 * sc, 0, 30 * sc, 12 * sc, 0, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.ellipse(0, 0, 18 * sc, 9 * sc, 0, 0, 7); ctx.fillStyle = COL.ink; ctx.fill();
+    ctx.restore();
+  }
+  if (marker) {
+    const age = now - marker.t;
+    if (age > 500) marker = null;
+    else {
+      ctx.strokeStyle = marker.atk ? COL.red : COL.ink; ctx.globalAlpha = 1 - age / 500; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx(marker.x), sy(marker.y), (8 + age / 30) * sc, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+  }
+}
+
+function abilityBox(x, y, key, cd, max) {
+  const s = 58;
+  ctx.fillStyle = 'rgba(12,20,18,.9)'; ctx.fillRect(x, y, s, s);
+  ctx.strokeStyle = cd > 0 ? '#2c3f38' : COL.gold; ctx.lineWidth = 3; ctx.strokeRect(x, y, s, s);
+  if (cd > 0) { ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(x, y + s * (1 - cd / max), s, s * (cd / max)); }
+  ctx.fillStyle = COL.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 24px sans-serif'; ctx.fillText(key, x + s / 2, y + s / 2 - (cd > 0 ? 8 : 0));
+  if (cd > 0) { ctx.font = 'bold 15px sans-serif'; ctx.fillText(Math.ceil(cd), x + s / 2, y + s / 2 + 14); }
+}
+
+function drawHud() {
+  const me = S.pl.find(p => p.id === myId);
+  // Ã¼st orta: skor ve sÃ¼re
+  const kills = [0, 0];
+  for (const p of S.pl) kills[p.team] += p.k;
+  const mm = Math.floor(S.time / 60), ss = Math.floor(S.time % 60);
+  ctx.fillStyle = 'rgba(12,20,18,.88)'; ctx.fillRect(vw / 2 - 90, 10, 180, 34);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold 20px sans-serif';
+  ctx.fillStyle = COL.blue; ctx.fillText(kills[0], vw / 2 - 62, 28);
+  ctx.fillStyle = COL.red; ctx.fillText(kills[1], vw / 2 + 62, 28);
+  ctx.fillStyle = COL.ink; ctx.font = '16px sans-serif';
+  ctx.fillText(mm + ':' + String(ss).padStart(2, '0'), vw / 2, 28);
+
+  if (!S.started) {
+    ctx.fillStyle = COL.ink; ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('Rakip bekleniyorâ€¦', vw / 2, 90);
+    ctx.fillStyle = '#8fa39a'; ctx.font = '15px sans-serif';
+    ctx.fillText('Sol Ã¼stteki dÃ¼ÄŸmeyle linki kopyalayÄ±p arkadaÅŸÄ±na gÃ¶nder.', vw / 2, 118);
+  }
+
+  if (me) {
+    const bx = vw / 2 - 66, by = vh - 96;
+    if (!touchUI) {
+      abilityBox(bx, by, 'Q', me.cq, 4);
+      abilityBox(bx + 72, by, 'W', me.cw, 7);
+    }
+    bar(vw / 2, vh - 26, 220, me.hp, me.mh);
+    ctx.fillStyle = COL.ink; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('Kill ' + me.k + '  Â·  Ã–lÃ¼m ' + me.de + '  Â·  Minyon ' + me.cs, vw / 2, vh - 34);
+    if (me.d) {
+      ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, 0, vw, vh);
+      ctx.fillStyle = COL.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold 30px sans-serif';
+      ctx.fillText('Yeniden doÄŸuyorsun: ' + Math.ceil(me.rs), vw / 2, vh / 2);
+    }
+  }
+
+  // mini harita
+  const mw = touchUI ? 160 : 230, mh = mw * H / W, mx = vw - mw - 12, my = 12;
+  ctx.fillStyle = 'rgba(12,20,18,.9)'; ctx.fillRect(mx - 3, my - 3, mw + 6, mh + 6);
+  ctx.fillStyle = COL.lane; ctx.fillRect(mx, my + mh * (LANE - 120) / H, mw, mh * 240 / H);
+  const mp = (x, y) => [mx + x / W * mw, my + y / H * mh];
+  for (const s of S.st) if (s.hp > 0) { const [a, b] = mp(s.rx, s.ry); ctx.fillStyle = teamCol(s.team); ctx.fillRect(a - 4, b - 4, 8, 8); }
+  for (const m of S.mn) { const [a, b] = mp(m.rx, m.ry); ctx.fillStyle = teamCol(m.team); ctx.fillRect(a - 1, b - 1, 2, 2); }
+  for (const p of S.pl) if (!p.d) { const [a, b] = mp(p.rx, p.ry); ctx.fillStyle = teamCol(p.team); ctx.beginPath(); ctx.arc(a, b, 3.5, 0, 7); ctx.fill(); if (p.id === myId) { ctx.strokeStyle = COL.ink; ctx.lineWidth = 1.5; ctx.stroke(); } }
+  ctx.strokeStyle = 'rgba(232,239,230,.5)'; ctx.lineWidth = 1;
+  const [ca, cb] = mp(cam.x - vw / 2 / sc, cam.y - vh / 2 / sc);
+  ctx.strokeRect(ca, cb, vw / sc / W * mw, vh / sc / H * mh);
+
+  // maÃ§ sonu
+  if (S.winner !== null) {
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, vw, vh);
+    const win = S.winner === myTeam;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = win ? COL.gold : COL.red; ctx.font = 'bold 64px sans-serif';
+    ctx.fillText(win ? 'ZAFER' : 'YENÄ°LGÄ°', vw / 2, vh / 2 - 10);
+    ctx.fillStyle = COL.ink; ctx.font = '18px sans-serif';
+    ctx.fillText('Yeni maÃ§ birazdan baÅŸlÄ±yor', vw / 2, vh / 2 + 40);
+  }
+}
+
+function pad(x, y, r, fill, label, cd, max, fontPx) {
+  ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = 3; ctx.stroke();
+  if (cd > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.beginPath(); ctx.moveTo(x, y);
+    ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (cd / max)); ctx.closePath(); ctx.fill();
+  }
+  ctx.fillStyle = COL.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold ' + fontPx + 'px sans-serif';
+  ctx.fillText(cd > 0 ? Math.ceil(cd) : label, x, y + 1);
+}
+
+function drawTouch() {
+  const me = mePl(), u = UI();
+  // niÅŸan Ã§izgisi
+  if (btn && btn.drag && me && !me.d) {
+    const l = Math.hypot(btn.dx, btn.dy), dx = btn.dx / l, dy = btn.dy / l;
+    const len = (btn.key === 'q' ? 800 : 330) * sc, x = sx(me.rx), y = sy(me.ry);
+    ctx.strokeStyle = 'rgba(242,193,78,.55)'; ctx.lineCap = 'round';
+    ctx.lineWidth = (btn.key === 'q' ? 30 : 10) * sc;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dx * len, y + dy * len); ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
+  // joystick
+  const jx = joy.id !== null ? joy.ox : 110, jy = joy.id !== null ? joy.oy : vh - 110;
+  ctx.globalAlpha = 0.4; ctx.fillStyle = '#0c1412'; ctx.beginPath(); ctx.arc(jx, jy, 66, 0, 7); ctx.fill();
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = 2; ctx.stroke();
+  ctx.globalAlpha = 0.8; ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(jx + joy.x, jy + joy.y, 26, 0, 7); ctx.fill();
+  ctx.globalAlpha = 1;
+  // dÃ¼ÄŸmeler
+  const held = atkHeld !== null;
+  pad(u.atk.x, u.atk.y, u.atk.r, held ? '#ff9b80' : 'rgba(255,122,89,.85)', 'Vur', 0, 1, 22);
+  pad(u.q.x, u.q.y, u.q.r, 'rgba(22,34,31,.9)', 'Q', me ? me.cq : 0, 4, 24);
+  pad(u.w.x, u.w.y, u.w.r, 'rgba(22,34,31,.9)', 'W', me ? me.cw : 0, 7, 24);
+}
+
+function draw(now) {
+  requestAnimationFrame(draw);
+  frame++;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!S || !joined) { ctx.fillStyle = COL.ground; ctx.fillRect(0, 0, vw, vh); return; }
+
+  for (const list of [S.pl, S.mn, S.st]) for (const e of list) smooth(e);
+  for (const q of S.pr) { q.rx = q.x; q.ry = q.y; }
+  if (frame % 300 === 0) for (const [id, r] of rp) if (r.seen < frame - 120) rp.delete(id);
+
+  const me = S.pl.find(p => p.id === myId);
+  if (me) {
+    const hw = vw / 2 / sc, hh = vh / 2 / sc;
+    cam.x = W <= hw * 2 ? W / 2 : Math.max(hw, Math.min(W - hw, me.rx));
+    cam.y = H <= hh * 2 ? H / 2 : Math.max(hh, Math.min(H - hh, me.ry));
+  }
+
+  drawWorld();
+  for (const s of S.st) drawStruct(s);
+  for (const m of S.mn) drawMinion(m);
+  for (const p of S.pl) drawChamp(p);
+  drawFx(now);
+  drawHud();
+  if (touchUI) {
+    drawTouch();
+    if (vh > vw) {
+      ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(0, vh / 2 - 40, vw, 80);
+      ctx.fillStyle = COL.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold 18px sans-serif';
+      ctx.fillText('Telefonu yatay Ã§evir', vw / 2, vh / 2);
+    }
+  }
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
